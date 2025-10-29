@@ -4,7 +4,7 @@ import io from 'socket.io-client';
 const App = () => {
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
-  const [socket] = useState(() => io('http://localhost:3001'));
+  const [socket] = useState(() => io('https://meetverse-zk38.onrender.com/'));
   const [localStream, setLocalStream] = useState(null);
   const [peerConnection, setPeerConnection] = useState(null);
   const [isCaller, setIsCaller] = useState(false);
