@@ -1,5 +1,41 @@
 import React, { useState, useRef, useEffect } from 'react';
 import io from 'socket.io-client';
+import { 
+  Layout, 
+  Card, 
+  Button, 
+  Typography, 
+  Space, 
+  Row, 
+  Col, 
+  Input, 
+  Badge, 
+  Avatar, 
+  Divider,
+  Tooltip,
+  notification,
+  Drawer,
+  FloatButton
+} from 'antd';
+import {
+  VideoCameraOutlined,
+  VideoCameraAddOutlined,
+  AudioOutlined,
+  AudioMutedOutlined,
+  PhoneOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
+  CopyOutlined,
+  SendOutlined,
+  MessageOutlined,
+  UserOutlined,
+  DownloadOutlined,
+  MenuOutlined,
+  CloseOutlined
+} from '@ant-design/icons';
+
+const { Header, Content } = Layout;
+const { Title, Text } = Typography;
 
 const App = () => {
   const localVideoRef = useRef();
@@ -17,78 +53,71 @@ const App = () => {
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
+  const [chatVisible, setChatVisible] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const mediaRecorderRef = useRef();
   const recordedChunksRef = useRef([]);
   const messagesEndRef = useRef();
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const getIceServers = async () => {
     const res = await fetch(
       "https://meetverse.metered.live/api/v1/turn/credentials?apiKey=4bae79092f7f6cddf27d77cd89eacec5a519"
     );
     const iceServers = await res.json();
-    console.log("✅ ICE servers fetched:", iceServers);
     return iceServers;
   };
 
   const createPeerConnection = (servers) => {
-    console.log("🔗 Creating RTCPeerConnection...");
     const pc = new RTCPeerConnection({ iceServers: servers });
 
     pc.ontrack = (event) => {
-      console.log("📺 Received remote track:", event.track.kind);
-      console.log('🎥 Remote stream:', event.streams[0]);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = event.streams[0];
-        console.log('✅ Remote video element updated');
-      } else {
-        console.error('❌ Remote video ref not available');
       }
     };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("🌐 Sending ICE candidate via Socket.IO:", event.candidate);
-        socket.emit("candidate", event.candidate);
+        socket.emit("candidate", { candidate: event.candidate, roomId });
       }
-    };
-
-    pc.onconnectionstatechange = () => {
-      console.log("🔌 Peer connection state:", pc.connectionState);
-      if (pc.connectionState === 'failed') {
-        console.log('❌ Connection failed, you may need to restart the call');
-      } else if (pc.connectionState === 'connected') {
-        console.log('✅ Peer connection established successfully!');
-      }
-    };
-
-    pc.onsignalingstatechange = () => {
-      console.log("📝 Signaling State:", pc.signalingState);
     };
 
     return pc;
   };
 
   const createRoom = () => {
-    const newRoomId = Math.random().toString(36).substring(2, 8);
-    setRoomId(newRoomId);
-    setIsCreator(true);
-    setIsInRoom(true);
-    console.log('🏠 Room created:', newRoomId);
+    if (!socket.connected) {
+      socket.connect();
+      setTimeout(() => {
+        if (socket.connected) {
+          socket.emit('create-room');
+        } else {
+          notification.error({
+            message: 'Connection Error',
+            description: 'Cannot connect to server.',
+            placement: 'topRight'
+          });
+        }
+      }, 1000);
+    } else {
+      socket.emit('create-room');
+    }
   };
 
   const joinRoomFromUrl = (roomFromUrl) => {
-    setRoomId(roomFromUrl);
-    setIsCreator(false);
-    setIsInRoom(true);
-    console.log('👤 Joined room:', roomFromUrl);
-    socket.emit('user-joined-room', roomFromUrl);
+    socket.emit('join-room', roomFromUrl);
   };
 
   const startCall = async () => {
-    console.log("📄 Starting call in room:", roomId, "IsCreator:", isCreator);
-    
     if (peerConnection) {
-      console.log('🔄 Closing existing peer connection');
       peerConnection.close();
       setPeerConnection(null);
     }
@@ -97,33 +126,40 @@ const App = () => {
       const servers = await getIceServers();
       const pc = createPeerConnection(servers);
       setPeerConnection(pc);
-      console.log('✅ Peer connection created successfully');
 
       if (isCreator) {
         pc.addTransceiver("video", { direction: "recvonly" });
         pc.addTransceiver("audio", { direction: "recvonly" });
-        console.log("🎯 Added recvonly transceivers for creator");
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        console.log('📤 Sending offer to server');
-        socket.emit("offer", offer);
-      } else {
-        console.log('👤 Participant waiting for offer...');
+        socket.emit("offer", { offer, roomId });
       }
     } catch (error) {
-      console.error('❌ Error starting call:', error);
+      notification.error({
+        message: 'Call Error',
+        description: 'Failed to start the call.',
+        placement: 'topRight'
+      });
     }
   };
 
   const toggleRecording = () => {
     if (!isCreator) {
-      alert("❌ Only the room creator can record!");
+      notification.warning({
+        message: 'Permission Denied',
+        description: 'Only the host can record.',
+        placement: 'topRight'
+      });
       return;
     }
     
     if (!remoteVideoRef.current.srcObject) {
-      alert("❌ No remote video to record yet!");
+      notification.warning({
+        message: 'No Video',
+        description: 'No remote video to record yet!',
+        placement: 'topRight'
+      });
       return;
     }
 
@@ -141,16 +177,18 @@ const App = () => {
         const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
         setDownloadUrl(url);
-        console.log("✅ Recording stopped, ready to download");
+        notification.success({
+          message: 'Recording Ready',
+          description: 'Your recording is ready for download.',
+          placement: 'topRight'
+        });
       };
 
       mediaRecorderRef.current.start();
       setRecording(true);
-      console.log("⏺ Recording started");
     } else {
       mediaRecorderRef.current.stop();
       setRecording(false);
-      console.log("⏹ Recording stopped");
     }
   };
 
@@ -187,7 +225,11 @@ const App = () => {
         localVideoRef.current.srcObject = videoStream;
       }
     } catch (error) {
-      console.error('Error accessing video:', error);
+      notification.error({
+        message: 'Camera Error',
+        description: 'Failed to access camera.',
+        placement: 'topRight'
+      });
     }
   };
 
@@ -206,7 +248,11 @@ const App = () => {
         localVideoRef.current.srcObject = audioStream;
       }
     } catch (error) {
-      console.error('Error accessing audio:', error);
+      notification.error({
+        message: 'Microphone Error',
+        description: 'Failed to access microphone.',
+        placement: 'topRight'
+      });
     }
   };
 
@@ -231,64 +277,92 @@ const App = () => {
   };
 
   const sendMessage = () => {
-    console.log('💬 Send message clicked, message:', newMessage);
     if (newMessage.trim()) {
       const message = {
         text: newMessage,
-        sender: isCreator ? 'Creator' : 'Participant',
+        sender: isCreator ? 'Host' : 'Guest',
         timestamp: new Date().toLocaleTimeString()
       };
-      // Use candidate event to send chat messages (server broadcasts these)
-      const chatData = { type: 'chat', message };
-      console.log('💬 Sending chat via candidate event:', chatData);
-      socket.emit('candidate', chatData);
-      console.log('💬 Message added to local state');
+      socket.emit('chat-message', { message, roomId });
       setMessages(prev => [...prev, message]);
       setNewMessage('');
-    } else {
-      console.log('💬 Empty message, not sending');
     }
   };
 
   const copyRoomLink = () => {
     const link = `${window.location.origin}?room=${roomId}`;
     navigator.clipboard.writeText(link);
-    alert('Room link copied to clipboard!');
+    notification.success({
+      message: 'Link Copied',
+      description: 'Room link copied to clipboard.',
+      placement: 'topRight'
+    });
   };
 
   useEffect(() => {
-    console.log('🔌 Socket connection status:', socket.connected);
+    if (!socket.connected) {
+      socket.connect();
+    }
     
-    socket.on('connect', () => {
-      console.log('✅ Socket connected successfully, socket ID:', socket.id);
+    socket.on('connect', () => {});
+    socket.on('disconnect', (reason) => {});
+    socket.on('connect_error', (error) => {});
+    socket.on('reconnect', (attemptNumber) => {});
+    socket.on('reconnect_error', (error) => {});
+    
+    socket.on('room-created', (roomId) => {
+      setRoomId(roomId);
+      setIsCreator(true);
+      setIsInRoom(true);
+      notification.success({
+        message: 'Room Created',
+        description: `Room ${roomId.substring(0, 8)} created successfully.`,
+        placement: 'topRight'
+      });
     });
-    
-    socket.on('disconnect', () => {
-      console.log('❌ Socket disconnected');
+
+    socket.on('room-joined', ({ roomId: joinedRoomId, isCreator: creator }) => {
+      setRoomId(joinedRoomId);
+      setIsCreator(creator);
+      setIsInRoom(true);
+      notification.success({
+        message: 'Room Joined',
+        description: `Joined room ${joinedRoomId.substring(0, 8)}.`,
+        placement: 'topRight'
+      });
     });
-    
-    socket.on('user-joined-room', (data) => {
-      console.log('💬 Received user-joined-room event, data:', data, 'type:', typeof data);
-      // Handle as regular join notification
+
+    socket.on('room-error', (error) => {
+      notification.error({
+        message: 'Room Error',
+        description: error,
+        placement: 'topRight'
+      });
+    });
+
+    socket.on('user-joined', () => {
       if (isCreator) {
-        alert('👤 Someone joined your room!');
-        console.log('👤 User joined the room');
+        notification.info({
+          message: 'User Joined',
+          description: 'Someone joined your room!',
+          placement: 'topRight'
+        });
       }
     });
 
+    socket.on('chat-message', ({ message }) => {
+      setMessages(prev => [...prev, message]);
+    });
+
     socket.on("offer", async (offer) => {
-      console.log("📩 Received offer. IsCreator:", isCreator);
       if (isCreator) {
-        console.log('⚠️ Ignoring offer because I am the creator');
         return;
       }
 
       if (peerConnection) {
-        console.log('🔄 Closing existing peer connection for new offer');
         peerConnection.close();
       }
 
-      console.log("🎥 Accessing participant media...");
       try {
         const constraints = {};
         if (videoEnabled) constraints.video = true;
@@ -303,75 +377,57 @@ const App = () => {
         
         localVideoRef.current.srcObject = stream;
         setLocalStream(stream);
-        console.log("✅ Participant media accessed");
 
         const servers = await getIceServers();
         const pc = createPeerConnection(servers);
         setPeerConnection(pc);
 
         stream.getTracks().forEach(track => {
-          console.log('🎥 Adding track:', track.kind);
           pc.addTrack(track, stream);
         });
-        console.log("✅ Participant tracks added");
 
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        console.log("✅ Remote description set for participant");
 
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        console.log("📤 Sending answer to server via Socket.IO");
-        socket.emit("answer", answer);
+        socket.emit("answer", { answer, roomId });
       } catch (error) {
-        console.error('❌ Error in offer handling:', error);
+        console.error('Error in offer handling:', error);
       }
     });
 
     socket.on("answer", async (answer) => {
-      console.log("📩 Received answer. PeerConnection exists:", !!peerConnection);
       if (!peerConnection) {
-        console.log('⚠️ No peer connection available for answer');
         return;
       }
       try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log("✅ Remote description set for creator");
       } catch (error) {
-        console.error('❌ Error setting remote description:', error);
+        console.error('Error setting remote description:', error);
       }
     });
 
     socket.on("candidate", async (candidate) => {
-      console.log("🌐 Received candidate event, data:", candidate, "type:", typeof candidate);
-      
-      // Check if it's a chat message
-      if (candidate && typeof candidate === 'object' && candidate.type === 'chat') {
-        console.log('💬 Received chat message via candidate:', candidate.message);
-        setMessages(prev => {
-          const newMessages = [...prev, candidate.message];
-          console.log('💬 Updated messages from candidate:', newMessages);
-          return newMessages;
-        });
-        return;
-      }
-      
-      // Handle as regular ICE candidate
-      console.log("🌐 Processing as ICE candidate. PeerConnection exists:", !!peerConnection);
       try {
         if (peerConnection && peerConnection.remoteDescription && candidate.candidate) {
           await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log('✅ ICE candidate added successfully');
-        } else {
-          console.log('⚠️ Skipping ICE candidate - no remote description or invalid candidate');
         }
       } catch (err) {
-        console.error("❌ Error adding ICE candidate:", err);
+        console.error("Error adding ICE candidate:", err);
       }
     });
 
     return () => {
       socket.off('connect');
-      socket.off('user-joined-room');
+      socket.off('disconnect');
+      socket.off('connect_error');
+      socket.off('reconnect');
+      socket.off('reconnect_error');
+      socket.off('room-created');
+      socket.off('room-joined');
+      socket.off('room-error');
+      socket.off('user-joined');
+      socket.off('chat-message');
       socket.off("offer");
       socket.off("answer");
       socket.off("candidate");
@@ -379,7 +435,6 @@ const App = () => {
   }, [socket, isCreator, peerConnection, videoEnabled, audioEnabled]);
 
   useEffect(() => {
-    console.log('💬 Messages updated, count:', messages.length, 'messages:', messages);
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -391,146 +446,307 @@ const App = () => {
     }
   }, []);
 
+  const ChatPanel = () => (
+    <div style={{ padding: '16px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Title level={5} style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <MessageOutlined />
+        Chat
+        {isMobile && (
+          <Button 
+            type="text" 
+            icon={<CloseOutlined />} 
+            onClick={() => setChatVisible(false)}
+            style={{ marginLeft: 'auto' }}
+          />
+        )}
+      </Title>
+      
+      <div style={{ flex: 1, overflowY: 'auto', marginBottom: '16px', maxHeight: isMobile ? '300px' : 'none' }}>
+        {messages.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#999', marginTop: '40px' }}>
+            <MessageOutlined style={{ fontSize: '32px', marginBottom: '8px' }} />
+            <div>No messages yet</div>
+            <Text type="secondary" style={{ fontSize: '12px' }}>Start the conversation!</Text>
+          </div>
+        ) : (
+          messages.map((msg, index) => (
+            <div key={index} className={`message-bubble ${msg.sender === (isCreator ? 'Host' : 'Guest') ? 'own' : ''}`}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <Avatar size="small" icon={<UserOutlined />} />
+                <Text strong style={{ fontSize: '12px' }}>{msg.sender}</Text>
+                <Text type="secondary" style={{ fontSize: '10px' }}>{msg.timestamp}</Text>
+              </div>
+              <Text>{msg.text}</Text>
+            </div>
+          ))
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+      
+      <Space.Compact style={{ width: '100%' }}>
+        <Input 
+          value={newMessage}
+          onChange={(e) => setNewMessage(e.target.value)}
+          onPressEnter={sendMessage}
+          placeholder="Type a message..."
+          style={{ borderRadius: '8px 0 0 8px' }}
+        />
+        <Button 
+          type="primary" 
+          onClick={sendMessage}
+          icon={<SendOutlined />}
+          style={{ borderRadius: '0 8px 8px 0' }}
+        />
+      </Space.Compact>
+    </div>
+  );
+
   if (!isInRoom) {
     return (
-      <div style={{ fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px' }}>
-        <h2>🟢 Meetverse - Video Calling</h2>
-        
-        <div style={{ marginBottom: '20px' }}>
-          <button 
+      <div className="meeting-layout" style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        minHeight: '100vh', 
+        padding: isMobile ? '16px' : '20px' 
+      }}>
+        <Card className="welcome-card fade-in" style={{ maxWidth: isMobile ? '100%' : '400px' }}>
+          <div className="logo-text" style={{ fontSize: isMobile ? '28px' : '32px' }}>Meetverse</div>
+          <Text type="secondary" style={{ fontSize: isMobile ? '14px' : '16px', display: 'block', marginBottom: '32px' }}>
+            Professional Video Conferencing
+          </Text>
+          
+          <Button 
+            type="primary" 
+            size="large" 
+            icon={<VideoCameraAddOutlined />}
             onClick={createRoom}
-            style={{ padding: '15px 30px', fontSize: '16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+            className="pulse"
+            style={{ 
+              width: '100%', 
+              height: isMobile ? '48px' : '50px', 
+              fontSize: isMobile ? '14px' : '16px' 
+            }}
           >
-            Create Room
-          </button>
-        </div>
+            Create Meeting Room
+          </Button>
+          
+          <Divider />
+          
+          <Text type="secondary" style={{ fontSize: isMobile ? '12px' : '14px' }}>
+            Create a room and share the link with others to start your professional meeting
+          </Text>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div style={{ fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <h2>🟮 Room: {roomId.substring(0, 8)}...</h2>
-      
-      {isCreator && (
-        <div style={{ marginBottom: '10px' }}>
-          <button 
-            onClick={copyRoomLink}
-            style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: '#FF9800', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}
-          >
-            Copy Room Link
-          </button>
-          <span style={{ fontSize: '12px', color: '#666' }}>Share this link to invite others</span>
-        </div>
-      )}
-      
-      <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap' }}>
-        <div style={{ textAlign: 'center' }}>
-          <p style={{ margin: '5px', fontSize: '14px' }}>Your Video {isCreator ? '(Creator)' : '(Participant)'}</p>
-          <video 
-            ref={localVideoRef}
-            autoPlay 
-            muted 
-            playsInline
-            style={{ width: '300px', height: '200px', margin: '10px', border: '2px solid #444', backgroundColor: '#000' }}
+    <Layout className="meeting-layout" style={{ minHeight: '100vh' }}>
+      <Header style={{ 
+        padding: isMobile ? '0 16px' : '0 24px', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'space-between',
+        height: isMobile ? '56px' : '64px'
+      }}>
+        <Space align="center">
+          <Title level={isMobile ? 5 : 4} style={{ color: 'white', margin: 0 }}>
+            Meetverse
+          </Title>
+          <Badge 
+            status={peerConnection ? "success" : "error"} 
+            text={
+              <Text style={{ color: 'white', fontSize: isMobile ? '12px' : '14px' }}>
+                Room: {roomId.substring(0, isMobile ? 6 : 8)}...
+              </Text>
+            } 
           />
-          <div style={{ margin: '10px' }}>
-            <button 
-              onClick={toggleVideo}
-              style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: videoEnabled ? '#4CAF50' : '#f44336', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', marginRight: '10px' }}
-            >
-              {videoEnabled ? '📹 Video On' : '📹 Video Off'}
-            </button>
-            <button 
-              onClick={toggleAudio}
-              style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: audioEnabled ? '#4CAF50' : '#f44336', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
-            >
-              {audioEnabled ? '🎤 Mic On' : '🎤 Mic Off'}
-            </button>
-          </div>
-        </div>
-        <div style={{ textAlign: 'center' }}>
-          <p style={{ margin: '5px', fontSize: '14px' }}>Remote Video</p>
-          <video 
-            ref={remoteVideoRef}
-            autoPlay 
-            playsInline
-            style={{ width: '300px', height: '200px', margin: '10px', border: '2px solid #444', backgroundColor: '#000' }}
-          />
-        </div>
-      </div>
-
-      <div style={{ textAlign: 'center', margin: '10px' }}>
-        <p style={{ fontSize: '12px', color: '#666', margin: '5px' }}>
-          Status: {peerConnection ? `Connected (${peerConnection.connectionState})` : 'Not connected'}
-        </p>
-        <button 
-          onClick={startCall}
-          style={{ padding: '10px 20px', fontSize: '16px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: '5px' }}
-        >
-          {isCreator ? 'Start Call (Send Offer)' : 'Ready to Receive Call'}
-        </button>
-      </div>
-      
-      {isCreator && (
-        <button 
-          onClick={toggleRecording}
-          style={{ marginTop: '10px', padding: '10px', fontSize: '16px', backgroundColor: recording ? '#f44336' : '#4CAF50', color: 'white', border: 'none', borderRadius: '5px' }}
-        >
-          {recording ? 'Stop Recording' : 'Start Recording'}
-        </button>
-      )}
-      
-      {downloadUrl && isCreator && (
-        <a 
-          href={downloadUrl}
-          download="room_video.webm"
-          onClick={() => setDownloadUrl('')}
-          style={{ marginTop: '5px', padding: '10px', fontSize: '16px', backgroundColor: '#2196F3', color: 'white', textDecoration: 'none', borderRadius: '5px' }}
-        >
-          Download Recorded Video
-        </a>
-      )}
-      
-      <div style={{ width: '100%', maxWidth: '600px', marginTop: '20px', border: '1px solid #ccc', borderRadius: '10px', backgroundColor: '#f9f9f9' }}>
-        <div style={{ padding: '10px', borderBottom: '1px solid #ccc', backgroundColor: '#e9e9e9', borderRadius: '10px 10px 0 0' }}>
-          <h3 style={{ margin: '0', fontSize: '16px' }}>💬 Chat</h3>
-        </div>
+        </Space>
         
-        <div style={{ height: '200px', overflowY: 'auto', padding: '10px' }}>
-          {messages.length === 0 ? (
-            <p style={{ color: '#666', fontStyle: 'italic', textAlign: 'center' }}>No messages yet...</p>
-          ) : (
-            messages.map((msg, index) => (
-              <div key={index} style={{ marginBottom: '8px', padding: '5px', backgroundColor: 'white', borderRadius: '5px', border: '1px solid #eee' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '2px' }}>
-                  <strong>{msg.sender}</strong> - {msg.timestamp}
-                </div>
-                <div style={{ fontSize: '14px' }}>{msg.text}</div>
-              </div>
-            ))
+        <Space size={isMobile ? 'small' : 'middle'}>
+          <Badge 
+            count={isCreator ? 'Host' : 'Guest'} 
+            style={{ 
+              backgroundColor: isCreator ? '#722ed1' : '#1890ff',
+              fontSize: isMobile ? '10px' : '12px'
+            }}
+          />
+          {isCreator && (
+            <Tooltip title="Copy room link">
+              <Button 
+                type="ghost" 
+                icon={<CopyOutlined />} 
+                onClick={copyRoomLink}
+                size={isMobile ? 'small' : 'middle'}
+                style={{ color: 'white', borderColor: 'white' }}
+              >
+                {!isMobile && 'Share'}
+              </Button>
+            </Tooltip>
           )}
-          <div ref={messagesEndRef} />
-        </div>
-        
-        <div style={{ padding: '10px', borderTop: '1px solid #ccc', display: 'flex', gap: '10px' }}>
-          <input 
-            type="text"
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-            placeholder="Type a message..."
-            style={{ flex: 1, padding: '8px', border: '1px solid #ccc', borderRadius: '5px', fontSize: '14px' }}
-          />
-          <button 
-            onClick={sendMessage}
-            style={{ padding: '8px 16px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '14px' }}
-          >
-            Send
-          </button>
-        </div>
-      </div>
-    </div>
+          {isMobile && (
+            <Button 
+              type="ghost" 
+              icon={<MessageOutlined />} 
+              onClick={() => setChatVisible(true)}
+              style={{ color: 'white', borderColor: 'white' }}
+            />
+          )}
+        </Space>
+      </Header>
+
+      <Layout>
+        <Content style={{ padding: isMobile ? '12px' : '24px' }}>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} sm={24} md={12} lg={isMobile ? 24 : 16}>
+              <div style={{ marginBottom: '16px' }}>
+                <Card className="video-card" bodyStyle={{ padding: 0 }}>
+                  <div style={{ position: 'relative', aspectRatio: '16/9' }}>
+                    <video 
+                      ref={remoteVideoRef}
+                      autoPlay 
+                      playsInline
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                    <div style={{ 
+                      position: 'absolute', 
+                      bottom: '12px', 
+                      left: '12px', 
+                      background: 'rgba(0,0,0,0.7)', 
+                      color: 'white', 
+                      padding: '4px 8px', 
+                      borderRadius: '4px',
+                      fontSize: '12px'
+                    }}>
+                      {isCreator ? 'Participant' : 'Host'}
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              <Card className="video-card" bodyStyle={{ padding: 0 }}>
+                <div style={{ position: 'relative', aspectRatio: isMobile ? '4/3' : '16/9' }}>
+                  <video 
+                    ref={localVideoRef}
+                    autoPlay 
+                    muted 
+                    playsInline
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                  <div style={{ 
+                    position: 'absolute', 
+                    bottom: '12px', 
+                    left: '12px', 
+                    background: 'rgba(0,0,0,0.7)', 
+                    color: 'white', 
+                    padding: '4px 8px', 
+                    borderRadius: '4px',
+                    fontSize: '12px'
+                  }}>
+                    You ({isCreator ? 'Host' : 'Guest'})
+                  </div>
+                </div>
+              </Card>
+            </Col>
+
+            {!isMobile && (
+              <Col xs={0} sm={0} md={12} lg={8}>
+                <Card className="chat-panel" style={{ height: '600px' }}>
+                  <ChatPanel />
+                </Card>
+              </Col>
+            )}
+          </Row>
+
+          <Card className="control-panel" style={{ marginTop: '16px', textAlign: 'center' }}>
+            <Space size={isMobile ? 'middle' : 'large'} wrap>
+              <Tooltip title={videoEnabled ? "Turn off camera" : "Turn on camera"}>
+                <Button 
+                  className={`control-btn ${videoEnabled ? 'active' : 'inactive'}`}
+                  onClick={toggleVideo}
+                  icon={videoEnabled ? <VideoCameraOutlined /> : <VideoCameraAddOutlined />}
+                  size={isMobile ? 'middle' : 'large'}
+                />
+              </Tooltip>
+
+              <Tooltip title={audioEnabled ? "Mute microphone" : "Unmute microphone"}>
+                <Button 
+                  className={`control-btn ${audioEnabled ? 'active' : 'inactive'}`}
+                  onClick={toggleAudio}
+                  icon={audioEnabled ? <AudioOutlined /> : <AudioMutedOutlined />}
+                  size={isMobile ? 'middle' : 'large'}
+                />
+              </Tooltip>
+
+              <Tooltip title="Start/Join call">
+                <Button 
+                  className="control-btn neutral"
+                  onClick={startCall}
+                  icon={<PhoneOutlined />}
+                  size={isMobile ? 'middle' : 'large'}
+                />
+              </Tooltip>
+
+              {isCreator && (
+                <Tooltip title={recording ? "Stop recording" : "Start recording"}>
+                  <Button 
+                    className={`control-btn ${recording ? 'inactive' : 'neutral'}`}
+                    onClick={toggleRecording}
+                    icon={recording ? <StopOutlined /> : <PlayCircleOutlined />}
+                    size={isMobile ? 'middle' : 'large'}
+                  />
+                </Tooltip>
+              )}
+
+              {downloadUrl && isCreator && (
+                <Tooltip title="Download recording">
+                  <Button 
+                    className="control-btn active"
+                    href={downloadUrl}
+                    download="meeting_recording.webm"
+                    onClick={() => setDownloadUrl('')}
+                    icon={<DownloadOutlined />}
+                    size={isMobile ? 'middle' : 'large'}
+                  />
+                </Tooltip>
+              )}
+            </Space>
+
+            <Divider />
+
+            <Space>
+              <Badge 
+                status={peerConnection ? "success" : "error"} 
+                text={peerConnection ? "Connected" : "Disconnected"} 
+              />
+            </Space>
+          </Card>
+        </Content>
+      </Layout>
+
+      {/* Mobile Chat Drawer */}
+      <Drawer
+        title="Chat"
+        placement="bottom"
+        onClose={() => setChatVisible(false)}
+        open={chatVisible}
+        height="70%"
+        bodyStyle={{ padding: 0 }}
+      >
+        <ChatPanel />
+      </Drawer>
+
+      {/* Floating Chat Button for Mobile */}
+      {isMobile && messages.length > 0 && !chatVisible && (
+        <FloatButton
+          icon={<MessageOutlined />}
+          badge={{ count: messages.length, overflowCount: 99 }}
+          onClick={() => setChatVisible(true)}
+          style={{ right: 24, bottom: 24 }}
+        />
+      )}
+    </Layout>
   );
 };
 
