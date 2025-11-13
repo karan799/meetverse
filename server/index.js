@@ -8,8 +8,10 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: ["http://localhost:3000","http://localhost:3001", "http://localhost:3002", "https://meetverse-frontend.onrender.com"],
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  allowEIO3: true
 });
 
 const rooms = new Map();
@@ -26,20 +28,37 @@ io.on("connection", (socket) => {
   });
 
   socket.on("join-room", (roomId) => {
-    const room = rooms.get(roomId);
+    console.log(`🔍 Attempting to join room: ${roomId} by ${socket.id}`);
+    let room = rooms.get(roomId);
+    
+    // If room doesn't exist, create it and make this user the creator
     if (!room) {
-      socket.emit("room-error", "Room not found");
+      console.log(`🏠 Room ${roomId} not found, creating new room with ${socket.id} as creator`);
+      room = { creator: socket.id, participants: [socket.id] };
+      rooms.set(roomId, room);
+      socket.join(roomId);
+      socket.emit("room-joined", { roomId, isCreator: true });
+      console.log(`✅ User ${socket.id} created and joined room ${roomId}`);
       return;
     }
+    
     if (room.participants.length >= 2) {
+      console.log(`❌ Room is full: ${roomId}`);
       socket.emit("room-error", "Room is full");
       return;
     }
+    
+    if (room.participants.includes(socket.id)) {
+      console.log(`⚠️ User ${socket.id} already in room ${roomId}`);
+      socket.emit("room-joined", { roomId, isCreator: room.creator === socket.id });
+      return;
+    }
+    
     room.participants.push(socket.id);
     socket.join(roomId);
     socket.emit("room-joined", { roomId, isCreator: room.creator === socket.id });
     socket.to(roomId).emit("user-joined");
-    console.log(`👤 User ${socket.id} joined room ${roomId}`);
+    console.log(`✅ User ${socket.id} joined room ${roomId}`);
   });
 
   socket.on("offer", ({ offer, roomId }) => {
@@ -74,4 +93,4 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3002;
-server.listen(PORT, () => console.log(`🚀 Server running at http://localhost:3001`));
+server.listen(PORT, () => console.log(`🚀 Server running at http://localhost:3002`));

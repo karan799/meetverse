@@ -40,8 +40,16 @@ const { Title, Text } = Typography;
 const App = () => {
   const localVideoRef = useRef();
   const remoteVideoRef = useRef();
-  // const [socket] = useState(() => io('http://localhost:3001'));
-  const [socket] = useState(() => io('https://meetverse-zk38.onrender.com/'));
+  const [socket] = useState(() => io('https://meetverse-zk38.onrender.com/', {
+    transports: ['polling', 'websocket'],
+    upgrade: true,
+    rememberUpgrade: true,
+    timeout: 20000,
+    forceNew: true,
+    withCredentials: true,
+    autoConnect: false
+  }));
+  // const [socket] = useState(() => io('https://meetverse-zk38.onrender.com/'));
   const [localStream, setLocalStream] = useState(null);
   const [peerConnection, setPeerConnection] = useState(null);
   const [roomId, setRoomId] = useState('');
@@ -322,6 +330,7 @@ const App = () => {
     });
 
     socket.on('room-joined', ({ roomId: joinedRoomId, isCreator: creator }) => {
+      console.log('✅ Room joined successfully:', joinedRoomId, 'isCreator:', creator);
       setRoomId(joinedRoomId);
       setIsCreator(creator);
       setIsInRoom(true);
@@ -333,6 +342,7 @@ const App = () => {
     });
 
     socket.on('room-error', (error) => {
+      console.log('❌ Room error received:', error);
       notification.error({
         message: 'Room Error',
         description: error,
