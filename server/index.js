@@ -6,11 +6,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:3002", "https://meetverse-frontend.onrender.com"],
+    origin: ["http://localhost:3000","http://localhost:3001", "http://localhost:3002", "https://meetverse-frontend.onrender.com"],
     methods: ["GET", "POST"]
   }
 });
-
+console.log("here")
 io.on("connection", (socket) => {
   console.log(`✅ User connected: ${socket.id}`);
 
